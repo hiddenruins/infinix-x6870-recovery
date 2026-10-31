@@ -1,0 +1,12 @@
+# Local data and build output that must never be pushed to a remote.
+# The device tree (device/infinix/x6870) and tools/ are the only things CI needs.
+
+/stock/
+/src/
+/out/
+/.scratch/
+/.ci/
+/device-info/
+
+# Stock dumps / kernel source bundles kept for reference
+/android15_kernel_*.tar.gz

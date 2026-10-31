@@ -1,0 +1,28 @@
+# TWRP flags for Infinix X6870 (MT6878)
+# <mount point>   <fstype>  <device>                                 <device2>              <flags>
+
+# --- boot chain (A/B, slotselect appends _a/_b) ----------------------------
+/boot             emmc      /dev/block/by-name/boot                                        flags=slotselect;display="Boot";backup=1;flashimg=1
+/init_boot        emmc      /dev/block/by-name/init_boot                                   flags=slotselect;display="Init Boot";backup=1;flashimg=1
+/vendor_boot      emmc      /dev/block/by-name/vendor_boot                                 flags=slotselect;display="Vendor Boot";backup=1;flashimg=1
+/dtbo             emmc      /dev/block/by-name/dtbo                                        flags=slotselect;display="DTBO";backup=1;flashimg=1
+/vbmeta           emmc      /dev/block/by-name/vbmeta                                      flags=slotselect;display="VBMeta";backup=1;flashimg=1
+/vbmeta_system    emmc      /dev/block/by-name/vbmeta_system                               flags=slotselect;display="VBMeta System";backup=1;flashimg=1
+/vbmeta_vendor    emmc      /dev/block/by-name/vbmeta_vendor                               flags=slotselect;display="VBMeta Vendor";backup=1;flashimg=1
+/logo             emmc      /dev/block/by-name/logo                                        flags=slotselect;display="Logo";backup=1;flashimg=1
+
+# --- persistent / calibration / modem --------------------------------------
+/persist          ext4      /dev/block/by-name/persist                                     flags=display="Persist";backup=0
+/persist_image    emmc      /dev/block/by-name/persist                                     flags=display="Persist";backup=1
+/nvram            emmc      /dev/block/by-name/nvram                                       flags=display="NVRAM";backup=1;flashimg=1
+/nvdata           ext4      /dev/block/by-name/nvdata                                      flags=display="NVData";backup=0
+/nvcfg            ext4      /dev/block/by-name/nvcfg                                       flags=display="NVCfg";backup=0
+/protect_f        ext4      /dev/block/by-name/protect1                                    flags=display="Protect F";backup=0
+/protect_s        ext4      /dev/block/by-name/protect2                                    flags=display="Protect S";backup=0
+/modem            emmc      /dev/block/by-name/modem                                       flags=slotselect;display="Modem";backup=1;flashimg=1
+
+# --- storage ---------------------------------------------------------------
+# Internal storage lives on /data/media/0, so it is NOT removable.
+/storage          auto      /data/media/0                                                  flags=backup=1;display="Internal Storage";usermrf;fsflags="bind,utf8"
+# No microSD slot on this device (no mmc_host); OTG is a single block device.
+/usb_otg          auto      /dev/block/sdg1                                                 flags=fsflags=utf8;display="USB-Storage";storage;wipeingui;removable
