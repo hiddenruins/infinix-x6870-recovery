@@ -49,7 +49,11 @@ This repo can be built using the OrangeFox Recovery Builder pattern. Use one of 
   input device names).
 - Use `tools/repack_vendor_boot.sh` to repack a recovery ramdisk into a stock-style vendor_boot image locally.
 - KernelSU/SukiSU support flags are enabled via `vendorsetup.sh`.
-- VBMeta/AVB: `BOARD_AVB_ENABLE := false` as configured.
+- VBMeta/AVB: `BOARD_AVB_ENABLE := true`, but no signing key is set, so avbtool appends
+  an unsigned hash footer (`--algorithm NONE`) like the stock vendor_boot. AVB must stay
+  enabled: OrangeFox 12.1 runs its post-build step (`Fox_After_Recovery_Image`, which
+  produces `OrangeFox-*.img`, the md5 and the zip installer) only from the AVB branch of
+  build/make's vendor_boot rule.
 
 ## Building locally (recommended: native 12.1 repack)
 
@@ -69,7 +73,9 @@ mka vendorbootimage
 The script unpacks the built and the stock image with `magiskboot`, swaps only
 the recovery ramdisk fragment, repacks the stock image, and aborts if the result
 exceeds `BOARD_VENDOR_BOOTIMAGE_PARTITION_SIZE` (64 MiB). No separate repack step
-is needed. `tools/repack_vendor_boot.sh` produces the same layout and is used
+is needed. Note that this runs from OrangeFox's post-build hook, which only fires
+when `BOARD_AVB_ENABLE := true` (see "Notes specific to this device").
+`tools/repack_vendor_boot.sh` produces the same layout and is used
 when the build runs elsewhere (for example CI) and you only have the artifact.
 
 ## Repack a CI build (required for `vendorboot`)
