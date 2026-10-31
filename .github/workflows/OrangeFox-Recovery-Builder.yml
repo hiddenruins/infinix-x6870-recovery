@@ -37,6 +37,10 @@ on:
         - boot
         - recovery
         - vendorboot
+      STOCK_VENDOR_BOOT_URL:
+        description: 'URL of the stock vendor_boot.img (required for a bootable vendorboot image)'
+        required: false
+        default: ''
       LDCHECK:
         description: 'Path of blobs to check' 
         required: true
@@ -71,6 +75,7 @@ jobs:
         echo "Displaying variables/inputs."
         echo "Include Recovery Installer: ${{ github.event.inputs.RECOVERY_INSTALLER }}"
         echo "Release recovery.tar For Samsung devices: ${{ github.event.inputs.RECOVERY_TAR }}"
+        echo "Stock vendor_boot URL: ${{ github.event.inputs.STOCK_VENDOR_BOOT_URL }}"
         echo "::endgroup::"
 
     - name: Clean-up
@@ -135,6 +140,11 @@ jobs:
     - name: Set Build Date
       run: |
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
+        if [ "${{ github.event.inputs.BUILD_TARGET }}" = "vendorboot" ] && [ -z "${{ github.event.inputs.STOCK_VENDOR_BOOT_URL }}" ]; then
+          echo "NEEDS_REPACK=yes" >> $GITHUB_ENV
+        else
+          echo "NEEDS_REPACK=no" >> $GITHUB_ENV
+        fi
         if [ "${{ github.event.inputs.DEVICE_TREE }}" = "LOCAL" ] || [ "${{ github.event.inputs.DEVICE_TREE }}" = "local" ] || [ "${{ github.event.inputs.DEVICE_TREE }}" = "." ]; then
           echo "DEVICE_TREE_URL=https://github.com/${{ github.repository }}" >> $GITHUB_ENV
         else
@@ -176,6 +186,29 @@ jobs:
         fi
       continue-on-error: true
       
+    - name: Repack vendor_boot with the stock platform ramdisk
+      if: github.event.inputs.BUILD_TARGET == 'vendorboot' && github.event.inputs.STOCK_VENDOR_BOOT_URL != ''
+      run: |
+        set -euo pipefail
+        FOX_ROOT="${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}"
+        export PATH="${FOX_ROOT}/out/host/linux-x86/bin:${PATH}"
+        command -v lz4 >/dev/null || { sudo apt-get update && sudo apt-get install -y lz4; }
+        command -v mkbootimg >/dev/null || { echo "::error::mkbootimg not found under ${FOX_ROOT}/out/host/linux-x86/bin"; exit 1; }
+        command -v unpack_bootimg >/dev/null || { echo "::error::unpack_bootimg not found under ${FOX_ROOT}/out/host/linux-x86/bin"; exit 1; }
+        cd "$FILE_PATH"
+        echo "Downloading stock vendor_boot..."
+        curl -fL --retry 3 --retry-delay 5 -o stock_vendor_boot.img "${{ github.event.inputs.STOCK_VENDOR_BOOT_URL }}"
+        STOCK_IMG="$PWD/stock_vendor_boot.img" \
+          "${GITHUB_WORKSPACE}/tools/repack_vendor_boot.sh" vendor_boot.img vendor_boot-repacked.img
+        mv -f vendor_boot-repacked.img vendor_boot.img
+        rm -f stock_vendor_boot.img
+        echo "MD5_IMG=$(md5sum vendor_boot.img | cut -d ' ' -f 1)" >> $GITHUB_ENV
+
+    - name: Warn about un-repacked vendor_boot
+      if: github.event.inputs.BUILD_TARGET == 'vendorboot' && github.event.inputs.STOCK_VENDOR_BOOT_URL == ''
+      run: |
+        echo "::warning title=Un-repacked vendor_boot::This image was built without the stock platform ramdisk. All MTK kernel modules (display, touch, storage) live in stock fragment 0, so do NOT flash it as-is. Repack it locally first: STOCK_IMG=stock/vendor_boot_a.img tools/repack_vendor_boot.sh <downloaded vendor_boot.img> out/vendor_boot.img"
+
     - name: Include Recovery Installer
       run: |
         if [ ${{ github.event.inputs.RECOVERY_INSTALLER }} = true ]; then
@@ -209,3 +242,4 @@ jobs:
           Device: [${{ github.repository }}](${{ env.DEVICE_TREE_URL }})
           Commit: [${{ env.COMMIT_ID }}](${{ env.DEVICE_TREE_URL }}/commit/${{ env.COMMIT_ID }})
           MD5 (img): ${{ env.MD5_IMG }}
+          ${{ env.NEEDS_REPACK == 'yes' && '**WARNING: not repacked with the stock platform ramdisk - repack locally before flashing (see README).**' || '' }}

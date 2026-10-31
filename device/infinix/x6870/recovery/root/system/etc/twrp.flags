@@ -22,7 +22,12 @@
 /modem            emmc      /dev/block/by-name/modem                                       flags=slotselect;display="Modem";backup=1;flashimg=1
 
 # --- storage ---------------------------------------------------------------
-# Internal storage lives on /data/media/0, so it is NOT removable.
-/storage          auto      /data/media/0                                                  flags=backup=1;display="Internal Storage";usermrf;fsflags="bind,utf8"
-# No microSD slot on this device (no mmc_host); OTG is a single block device.
-/usb_otg          auto      /dev/block/sdg1                                                 flags=fsflags=utf8;display="USB-Storage";storage;wipeingui;removable
+# Internal storage lives on /data/media/0 and is exposed by TWRP from the
+# /data entry in recovery.fstab. Do not add a separate /storage entry here:
+# the block device column must resolve to a real block device, and a bind
+# mount of a directory is not handled by TWPartition::Mount().
+# No microSD slot on this device (mmc1 is disabled in the stock DTB), so the
+# only removable storage is USB-OTG. The internal UFS LUNs are sda/sdb/sdc
+# (see device-info/partitions.txt), so a USB stick enumerates as sdd; sde is
+# kept as a fallback in case the host controller takes another LUN first.
+/usb_otg          auto      /dev/block/sdd1   /dev/block/sde1                             flags=fsflags=utf8;display="USB-Storage";storage;wipeingui;removable
