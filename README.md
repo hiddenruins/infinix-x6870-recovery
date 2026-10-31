@@ -47,7 +47,7 @@ This repo can be built using the OrangeFox Recovery Builder pattern. Use one of 
 - Use `tools/verify_device.sh` to read back the values that cannot be derived from the
   stock dumps (kernel/module vermagic, backlight scale, USB-OTG node, battery path,
   input device names).
-- Use `tools/repack_vendor_boot.sh` to repack a recovery ramdisk into a stock-style vendor_boot image locally.
+- Use `tools/repack_vendor_boot.sh` to repack a recovery ramdisk into a stock-style vendor_boot image locally. It keeps the stock platform ramdisk + DTB untouched and zstd-compresses the recovery fragment so the result fits the 64 MiB partition.
 - KernelSU/SukiSU support flags are enabled via `vendorsetup.sh`.
 - VBMeta/AVB: `BOARD_AVB_ENABLE := true`, but no signing key is set, so avbtool appends
   an unsigned hash footer (`--algorithm NONE`) like the stock vendor_boot. AVB must stay
@@ -55,28 +55,44 @@ This repo can be built using the OrangeFox Recovery Builder pattern. Use one of 
   produces `OrangeFox-*.img`, the md5 and the zip installer) only from the AVB branch of
   build/make's vendor_boot rule.
 
-## Building locally (recommended: native 12.1 repack)
+## Building locally
 
-OrangeFox 12.1 can merge the built recovery ramdisk into the stock vendor_boot
-itself. `vendor/recovery/OrangeFox_A12.sh` calls
-`process_reference_vendor_boot_image()` after the image is built; point
-`FOX_REFERENCE_VENDOR_BOOT_IMAGE` at the stock dump before building:
+Build the recovery with the normal OrangeFox flow:
 
 ```bash
 cd fox_12.1
-export FOX_REFERENCE_VENDOR_BOOT_IMAGE=/path/to/stock/vendor_boot_a.img
 source build/envsetup.sh
 lunch twrp_x6870-eng
 mka vendorbootimage
 ```
 
-The script unpacks the built and the stock image with `magiskboot`, swaps only
-the recovery ramdisk fragment, repacks the stock image, and aborts if the result
-exceeds `BOARD_VENDOR_BOOTIMAGE_PARTITION_SIZE` (64 MiB). No separate repack step
-is needed. Note that this runs from OrangeFox's post-build hook, which only fires
-when `BOARD_AVB_ENABLE := true` (see "Notes specific to this device").
-`tools/repack_vendor_boot.sh` produces the same layout and is used
-when the build runs elsewhere (for example CI) and you only have the artifact.
+This produces `out/target/product/x6870/OrangeFox-*.img` (plus the `.zip` installer),
+whose recovery fragment is **LZ4-compressed**. Because the stock platform ramdisk
+already occupies 29.2 MB of the 64 MiB partition, that image is ~71.6 MB and does not
+fit as-is: it must be repacked into the stock layout (see below).
+
+OrangeFox's own `FOX_REFERENCE_VENDOR_BOOT_IMAGE` hook
+(`process_reference_vendor_boot_image()`) repacks with `magiskboot`, which reuses the
+stock fragment's LZ4 compression. That path ends in `FATAL ERROR ... greater than the
+partition size` on this device, so it cannot be used here. `tools/repack_vendor_boot.sh`
+is the supported path; it recompresses only the recovery fragment with zstd.
+
+### Why zstd
+
+The stock 6.1 kernel is built with `CONFIG_RD_ZSTD=y` / `CONFIG_ZSTD_DECOMPRESS=y`
+(verified with `scripts/extract-ikconfig` on `stock/boot_a.img`) and has no XZ/LZMA
+support. For the ~84 MB raw OrangeFox cpio:
+
+| compression | size | fits 64 MiB vendor_boot? |
+|---|---|---|
+| stock platform ramdisk (LZ4, kept untouched) | 29,200,444 B | — |
+| recovery fragment, LZ4 (`-l -12`) | 42,096,890 B | no (71.6 MB total) |
+| recovery fragment, gzip `-9` | 37,451,887 B | no (~66.7 MB total) |
+| recovery fragment, **zstd `-19 -T1`** | **29,068,634 B** | **yes (58.6 MB total)** |
+
+`tools/repack_vendor_boot.sh` therefore keeps the stock platform ramdisk and DTB
+byte-identical (it verifies this after repacking) and compresses the recovery fragment
+with zstd whenever the input fragment does not already fit.
 
 ## Repack a CI build (required for `vendorboot`)
 
@@ -94,8 +110,11 @@ fastboot flash vendor_boot_a out/vendor_boot-ofox.img
 fastboot reboot recovery
 ```
 
-The script asserts that the DTB and the stock platform ramdisk are byte-identical to
-the stock image, and refuses if the result exceeds the 64 MiB partition.
+The script detects the input format (lz4/zstd/gzip/cpio), keeps it if it fits, otherwise
+decompresses it and recompresses with `zstd -19 -T1`. It asserts that the DTB and the
+stock platform ramdisk are byte-identical to the stock image, that the recovery fragment
+decompresses back to the same cpio, and refuses if the result exceeds the 64 MiB
+partition.
 
 ## Local repack (from a built recovery ramdisk)
 
