@@ -1,0 +1,16 @@
+# OrangeFox recovery init additions for Infinix X6870 (MT6878)
+#
+# The display stack (mediatek-drm + nt37703a panel) is loaded by TWRP from the
+# stock vendor_boot ramdisk (/lib/modules/modules.load.recovery). Touch drivers
+# are NOT in vendor_boot - the vendor keeps them in /odm_dlkm, so they are
+# bundled in this ramdisk instead.
+#
+# Do NOT insmod the touch modules here. adaptive_ts needs tnek, opsMediator and
+# mtk_disp_notify (see the holders column in /proc/modules), which are only
+# inserted later by TWRP's module loader. Both modules are listed at the end of
+# TW_LOAD_VENDOR_MODULES instead, which libmodprobe resolves at Process_Fstab()
+# time - after tnek (line 187) and opsMediator (line 73), before gui_init().
+
+on init
+    setprop sys.usb.configfs 1
+    setprop sys.usb.controller "11201000.usb0"
