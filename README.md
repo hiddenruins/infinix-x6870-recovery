@@ -168,6 +168,12 @@ partition.
 
    If `fastboot devices` lists nothing here, **stop** and fix USB/udev first. The
    rollback plan depends on reaching this mode from a phone that does not boot.
+   Verify the rollback command itself works (no-op, writes the current slot again):
+
+   ```bash
+   fastboot --set-active=a      # use the slot printed by getvar current-slot
+   ```
+
    Also power the phone off and test the hardware key combo (power + volume-down)
    once, then `fastboot reboot` back to Android. That is the entry point you will
    use if a recovery image ever bootloops.
