@@ -20,9 +20,9 @@ PRODUCT_BUILD_SUPER_PARTITION := false
 # Virtual A/B helpers (snapuserd etc.)
 $(call inherit-product, $(SRC_TARGET_DIR)/product/virtual_ab_ota/launch_with_vendor_ramdisk.mk)
 
-# Note: Android 12.1 has no max-page-size check for prebuilt ELF files. The
-# check (and its PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE escape hatch) arrived
-# with Android 16 / SHIPPING_API_LEVEL 36, so nothing is needed here.
+# Note: Android 12.1 has no max-page-size check for prebuilt ELF files. That
+# check (and its PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE escape hatch) only exists
+# in newer build systems, so nothing is needed here.
 
 # OrangeFox UI defaults for this device
 $(call inherit-product, $(DEVICE_PATH)/fox_x6870.mk)

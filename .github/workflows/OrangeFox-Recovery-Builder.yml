@@ -4,14 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       MANIFEST_BRANCH:
-        description: 'OrangeFox Branch'
+        description: 'OrangeFox Branch (this tree targets 12.1 only)'
         required: true
         default: '12.1'
         type: choice
         options:
-        - 14.1
-        - 12.1
-        - 11.0
+        - '12.1'
       DEVICE_TREE:
         description: 'Device tree source (use "LOCAL" to use device tree from this repo)'
         required: true
@@ -29,16 +27,14 @@ on:
         required: true
         default: 'x6870'
       BUILD_TARGET:
-        description: 'Specify your Build Target'
+        description: 'Build target (this device builds vendor_boot only)'
         required: true
         default: 'vendorboot'
         type: choice
         options:
-        - boot
-        - recovery
         - vendorboot
       STOCK_VENDOR_BOOT_URL:
-        description: 'URL of the stock vendor_boot.img (required for a bootable vendorboot image)'
+        description: 'Optional: URL of the stock vendor_boot.img; if empty, repack locally after the build'
         required: false
         default: ''
       LDCHECK:
@@ -95,7 +91,7 @@ jobs:
         sudo bash setup/android_build_env.sh
       
     - name: Set-up Manifest
-      if: github.event.inputs.MANIFEST_BRANCH == '11.0' || github.event.inputs.MANIFEST_BRANCH == '12.1' || github.event.inputs.MANIFEST_BRANCH == '14.1'
+      if: github.event.inputs.MANIFEST_BRANCH == '12.1'
       run: |
         mkdir -p ${GITHUB_WORKSPACE}/OrangeFox
         cd ${GITHUB_WORKSPACE}/OrangeFox
@@ -124,7 +120,7 @@ jobs:
       uses: haya14busa/action-cond@v1
       id: fox_branch
       with:
-        cond: ${{ github.event.inputs.MANIFEST_BRANCH == '11.0' || github.event.inputs.MANIFEST_BRANCH == '12.1' }}
+        cond: ${{ github.event.inputs.MANIFEST_BRANCH == '12.1' }}
         if_true: lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng && make clean && mka adbd ${{ github.event.inputs.BUILD_TARGET }}image
         if_false: lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng && make clean && mka ${{ github.event.inputs.BUILD_TARGET }}image
       

@@ -23,7 +23,7 @@ if [ -z "$1" -a -z "$FOX_BUILD_DEVICE" ]; then
 fi
 
 if [ "$1" = "$FDEVICE" -o "$FOX_BUILD_DEVICE" = "$FDEVICE" ]; then
-    # Build name / output filename suffix (consumed by OrangeFox_A12.sh:316-317,
+    # Build name / output filename suffix (consumed by OrangeFox_A12.sh:315-316,
     # which reads it as an environment variable - a make assignment would be
     # silently ignored).
     export FOX_MAINTAINER_PATCH_VERSION=1
