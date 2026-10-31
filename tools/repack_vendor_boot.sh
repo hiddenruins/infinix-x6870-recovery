@@ -5,7 +5,7 @@
 #
 #   stock vendor_boot_a.img
 #     fragment 0 (type 1, "" )        : vendor_ramdisk00  (29 MB, LZ4)  <- kept
-#     fragment 1 (type 2, "recovery") : vendor_ramdisk01  (3 MB, cpio)  <- replaced
+#     fragment 1 (type 2, "recovery") : vendor_ramdisk01  (3.1 MB, LZ4) <- replaced
 #     dtb                             : stock DTB (328 KB)             <- kept
 #
 # Usage:
