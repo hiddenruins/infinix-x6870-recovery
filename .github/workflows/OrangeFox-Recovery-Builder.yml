@@ -47,10 +47,10 @@ on:
         default: false
         type: boolean
       RECOVERY_INSTALLER:
-        description: 'Include recovery installer zip'
+        description: 'Include recovery installer zip (unsafe on vendor_boot devices like x6870 - targets the boot partition)'
         type: boolean
         required: true
-        default: true
+        default: false
 
 jobs:
   build:
@@ -216,6 +216,10 @@ jobs:
         echo "::warning title=Un-repacked vendor_boot::This image was built without the stock platform ramdisk. All MTK kernel modules (display, touch, storage) live in stock fragment 0, so do NOT flash it as-is. Repack it locally first: STOCK_IMG=stock/vendor_boot_a.img tools/repack_vendor_boot.sh <downloaded vendor_boot.img> out/vendor_boot.img"
 
     - name: Include Recovery Installer
+      # The upstream installer picks /dev/block/by-name/boot when there is no
+      # dedicated recovery partition, so on this vendor_boot-as-recovery device it
+      # would overwrite boot_a/boot_b. It also only looks for recovery.img/twrp*.img,
+      # not vendor_boot.img, so the generated zip is not usable here anyway.
       run: |
         if [ ${{ github.event.inputs.RECOVERY_INSTALLER }} = true ]; then
           cd ${{ env.FILE_PATH }}/

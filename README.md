@@ -69,7 +69,9 @@ mka vendorbootimage
 This produces `out/target/product/x6870/OrangeFox-*.img` (plus the `.zip` installer),
 whose recovery fragment is **LZ4-compressed**. Because the stock platform ramdisk
 already occupies 29.2 MB of the 64 MiB partition, that image is ~71.6 MB and does not
-fit as-is: it must be repacked into the stock layout (see below).
+fit as-is; `recovery.img` inside the zip has the same problem and the zip installer is
+not usable for the first install on this device (see "What the CI release contains").
+It must be repacked into the stock layout (see below).
 
 OrangeFox's own `FOX_REFERENCE_VENDOR_BOOT_IMAGE` hook
 (`process_reference_vendor_boot_image()`) repacks with `magiskboot`, which reuses the
@@ -93,6 +95,35 @@ support. For the ~84 MB raw OrangeFox cpio:
 `tools/repack_vendor_boot.sh` therefore keeps the stock platform ramdisk and DTB
 byte-identical (it verifies this after repacking) and compresses the recovery fragment
 with zstd whenever the input fragment does not already fit.
+
+## What the CI release contains
+
+| asset | what it actually is | what to do with it |
+|---|---|---|
+| `vendor_boot.img` | raw build: AOSP **empty** platform ramdisk (2.2 MB) + OrangeFox recovery fragment (LZ4, 42.1 MB), padded to 64 MiB with an unsigned AVB footer | **never flash it**; it is the input for `tools/repack_vendor_boot.sh` |
+| `OrangeFox-R12.0_1-Unofficial-x6870.zip` | OrangeFox installer zip; contains `recovery.img` (md5-identical to the release `vendor_boot.img`), `vendor_ramdisk_recovery.cpio` (LZ4, 42.1 MB), `magiskboot` and helper scripts | **do not flash yet** on this device (see below) |
+| `recovery-installer.zip` | third-party generic installer with the raw `vendor_boot.img` added | **do not use**; the workflow now defaults to not producing it |
+
+Why the zip is not the initial install path here:
+
+- Its `recovery.img` is the same un-repacked image as the release `vendor_boot.img`, so
+  flashing it gives a recovery without the stock platform ramdisk (black screen).
+- Its `vendor_boot` installer branch (`FOX_INSTALLER_VENDOR_BOOT_RAMDISK_INSTALL`) dumps
+  the current vendor_boot, replaces the recovery fragment with the 42.1 MB LZ4 cpio and
+  repacks: ~71.6 MB, which does not fit, and that branch has no partition-size check. It
+  then writes the result to **both** slots, so you lose the stock spare.
+- `flash-whole-image.sh` flashes that same un-repacked `recovery.img`;
+  `flash-ramdisk.sh` uses `fastboot flash vendor_boot:recovery` with the 42.1 MB LZ4
+  ramdisk, which also cannot fit.
+
+`recovery-installer.zip` is worse: its `update-binary` looks for `recovery.img` /
+`twrp*.img`, and when there is no dedicated recovery partition it targets **`boot`**.
+On this device it finds no usable image and aborts; if it did find one, it would
+overwrite `boot_a`/`boot_b` with a vendor_boot image. Leave it alone.
+
+Once OrangeFox is already running you can rebuild the zip with a zstd
+`vendor_ramdisk_recovery.cpio` (and a zstd-aware, size-checked installer) if you want
+zip-based updates; the first installation must go through the repacked full image below.
 
 ## Repack a CI build (required for `vendorboot`)
 
