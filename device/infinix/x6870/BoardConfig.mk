@@ -36,6 +36,23 @@ TARGET_BOOTLOADER_BOARD_NAME := mt6878
 TARGET_NO_BOOTLOADER := true
 TARGET_OTA_ASSERT_DEVICE := X6870,x6870,Infinix-X6870,X6870-OP,mssi_64_64only_cn_armv82
 
+# --------------------------------------------------------------- partitions
+# The device has a real vendor partition (logical, inside super). Declaring the
+# vendor copy-out path makes build/make treat $OUT/root/vendor as a mount point
+# instead of a /system/vendor symlink (board_config.mk derives
+# BOARD_USES_VENDORIMAGE from TARGET_COPY_OUT_VENDOR).
+#
+# This is required for the recovery ramdisk: TWRP installs its vendor prebuilts
+# (vendor/bin/hw, vendor/etc/selinux, vendor/etc/vintf) straight into
+# $OUT/recovery/root/vendor. With the default "system/vendor" layout the
+# baseline-ramdisk rsync tries to replace that non-empty directory with the
+# /system/vendor symlink and ramdisk_files-timestamp fails with
+# "could not make way for new symlink: root/vendor".
+#
+# No vendor image is built: BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE is deliberately
+# not set, so BUILDING_VENDOR_IMAGE stays empty.
+TARGET_COPY_OUT_VENDOR := vendor
+
 # --------------------------------------------------------------- architecture
 TARGET_ARCH := arm64
 TARGET_ARCH_VARIANT := armv8-a
