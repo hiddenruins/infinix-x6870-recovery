@@ -9,7 +9,7 @@
 # mtk_disp_notify (see the holders column in /proc/modules), which are only
 # inserted later by TWRP's module loader. Both modules are listed at the end of
 # TW_LOAD_VENDOR_MODULES instead, which libmodprobe resolves at Process_Fstab()
-# time - after tnek (line 187) and opsMediator (line 73), before gui_init().
+# time - after tnek (line 186) and opsMediator (line 73), before gui_init().
 
 on init
     setprop sys.usb.configfs 1

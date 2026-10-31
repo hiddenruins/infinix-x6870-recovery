@@ -28,8 +28,8 @@ PRODUCT_RELEASE_NAME := x6870
 # OrangeFox metadata.
 # NOTE: OF_MAINTAINER is a make variable - orangefox.mk:216-219 turns it into
 # -DOF_MAINTAINER and data.cpp:749 displays it - so it belongs here.
-# The FOX_* switches are different: vendor/recovery/OrangeFox_A16.sh:316-317 reads
+# The FOX_* switches are different: vendor/recovery/OrangeFox_A12.sh:315-316 reads
 # FOX_MAINTAINER_PATCH_VERSION from the *environment* to name the output image, so
 # a "FOX_* := ..." here would only reach the compiled-in string. They are exported
-# from vendorsetup.sh instead (see AUDIT.md 4.3).
+# from vendorsetup.sh instead.
 OF_MAINTAINER := elric

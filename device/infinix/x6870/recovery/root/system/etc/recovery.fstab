@@ -1,5 +1,6 @@
 # Android fstab file (fs_mgr format) for OrangeFox recovery
-# Infinix X6870 (MT6878) - Android 16, A/B, dynamic partitions.
+# Infinix X6870 (MT6878) - stock firmware Android 16; built against OrangeFox 12.1.
+# A/B, dynamic partitions.
 #
 # <src>                        <mnt_point>    <type>  <mnt_flags>                      <fs_mgr_flags>
 

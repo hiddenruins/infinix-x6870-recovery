@@ -4,7 +4,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Infinix Note 50s (X6870) - MediaTek MT6878 (Dimensity 7300)
-# Android 16 / SDK 36, A/B, virtual A/B, dynamic partitions.
+# Stock firmware is Android 16 / SDK 36; this tree is built against the
+# OrangeFox 12.1 (Android 12.1) manifest. A/B, virtual A/B, dynamic partitions.
 #
 # Recovery lives in the "recovery" fragment of vendor_boot; boot.img only
 # carries the stock kernel, so we never touch it.
@@ -68,8 +69,9 @@ BOARD_RAMDISK_USE_LZ4 := true
 BOARD_MKBOOTIMG_ARGS += --header_version $(BOARD_BOOT_HEADER_VERSION)
 
 # Stock vendor_boot DTB (must stay byte-identical to the vendor image).
-# Android 12.1 concatenates *.dtb from BOARD_PREBUILT_DTBIMAGE_DIR into dtb.img;
-# the Android 16 tree used TARGET_PREBUILT_DTB instead.
+# The 12.1 build concatenates *.dtb from BOARD_PREBUILT_DTBIMAGE_DIR into
+# dtb.img. The stock Android 16 vendor tree used TARGET_PREBUILT_DTB instead,
+# which does not exist in the 12.1 build system - do not copy that over.
 BOARD_INCLUDE_DTB_IN_BOOTIMG := true
 BOARD_PREBUILT_DTBIMAGE_DIR := $(DEVICE_PATH)/prebuilt/dtb
 
@@ -139,8 +141,8 @@ TW_USE_FSCRYPT_POLICY := 2
 BOARD_USES_METADATA_PARTITION := true
 
 # ---------------------------------------------------------------- verified boot
-# We flash only vendor_boot (stock boot/init_boot/vbmeta stay untouched) and the
-# bootloader is already unlocked (ro.boot.flash.locked=0).
+# We flash only vendor_boot (stock boot/init_boot/vbmeta stay untouched).
+# The bootloader must be unlocked before flashing.
 BOARD_AVB_ENABLE := false
 
 # Keep platform happy: never let the build write anti-rollback metadata that

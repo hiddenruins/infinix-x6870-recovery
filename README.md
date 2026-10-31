@@ -6,7 +6,8 @@ OrangeFox Recovery 12.1 build configuration for Infinix X6870 (MediaTek MT6878, 
 
 - **Device:** Infinix Note 50s / X6870
 - **Platform:** MediaTek MT6878
-- **Android:** 16 / SDK 36
+- **Stock firmware:** Android 16 / SDK 36
+- **Recovery build base:** OrangeFox 12.1 (Android 12.1)
 - **Boot scheme:** A/B, Virtual A/B, Dynamic Partitions
 - **Recovery:** Lives in vendor_boot recovery ramdisk fragment (no dedicated recovery partition)
 
@@ -26,7 +27,7 @@ This repo can be built using the OrangeFox Recovery Builder pattern. Use one of 
 | `DEVICE_TREE_BRANCH` | `main` (or your branch) | Branch containing this tree |
 | `DEVICE_PATH` | `device/infinix/x6870` | Must match `DEVICE_PATH` in `BoardConfig.mk` |
 | `DEVICE_NAME` | `x6870` | As defined in `AndroidProducts.mk` / makefiles |
-| `DEVICE_MAKEFILE` | `fox_x6870.mk` | Or use `twrp_x6870.mk` depending on builder |
+| `DEVICE_MAKEFILE` | `twrp_x6870.mk` | The only product makefile in `AndroidProducts.mk` (`fox_x6870.mk` is inherited from `device.mk`) |
 | `BUILD_TARGET` | `vendorboot` | Recovery is in vendor_boot (see BoardConfig) |
 | `STOCK_VENDOR_BOOT_URL` | *(optional)* | If empty, CI uploads an un-repacked image that you must repack locally |
 | `RECOVERY_INSTALLER` | `true`/`false` | Optional |
@@ -49,6 +50,27 @@ This repo can be built using the OrangeFox Recovery Builder pattern. Use one of 
 - Use `tools/repack_vendor_boot.sh` to repack a recovery ramdisk into a stock-style vendor_boot image locally.
 - KernelSU/SukiSU support flags are enabled via `vendorsetup.sh`.
 - VBMeta/AVB: `BOARD_AVB_ENABLE := false` as configured.
+
+## Building locally (recommended: native 12.1 repack)
+
+OrangeFox 12.1 can merge the built recovery ramdisk into the stock vendor_boot
+itself. `vendor/recovery/OrangeFox_A12.sh` calls
+`process_reference_vendor_boot_image()` after the image is built; point
+`FOX_REFERENCE_VENDOR_BOOT_IMAGE` at the stock dump before building:
+
+```bash
+cd fox_12.1
+export FOX_REFERENCE_VENDOR_BOOT_IMAGE=/path/to/stock/vendor_boot_a.img
+source build/envsetup.sh
+lunch twrp_x6870-eng
+mka vendorbootimage
+```
+
+The script unpacks the built and the stock image with `magiskboot`, swaps only
+the recovery ramdisk fragment, repacks the stock image, and aborts if the result
+exceeds `BOARD_VENDOR_BOOTIMAGE_PARTITION_SIZE` (64 MiB). No separate repack step
+is needed. `tools/repack_vendor_boot.sh` produces the same layout and is used
+when the build runs elsewhere (for example CI) and you only have the artifact.
 
 ## Repack a CI build (required for `vendorboot`)
 
