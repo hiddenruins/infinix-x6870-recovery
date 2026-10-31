@@ -116,6 +116,88 @@ stock platform ramdisk are byte-identical to the stock image, that the recovery 
 decompresses back to the same cpio, and refuses if the result exceeds the 64 MiB
 partition.
 
+## Safe flashing and rollback
+
+### Before you flash
+
+1. Confirm the phone is still on the build the stock dump came from:
+
+   ```bash
+   adb shell getprop ro.build.id ro.build.version.incremental ro.boot.slot_suffix ro.boot.verifiedbootstate
+   ```
+
+   Expected at capture time: `BP2A.250605.031.A3`, `301500017`, `_a`, `orange`.
+   If an OTA changed the build, **re-dump the active slot's `vendor_boot` and `boot`**
+   and repack from the new dump: the platform-ramdisk kernel modules must match the
+   running kernel, or display/touch/storage will not come up.
+2. Verify the repacked image (the repack script already does the hard checks):
+
+   ```bash
+   IMAGE=out/vendor_boot-ofox.img
+   stat -c '%s %n' "$IMAGE"                                  # must be <= 67108864
+   unpack_bootimg --boot_img "$IMAGE" --format info           # header v4, 2 fragments
+   ```
+
+   It must report `header version: 4`, `vendor_ramdisk00` type `0x1`, and
+   `vendor_ramdisk01` type `0x2`, name `recovery`. Never flash the CI artifact
+   directly: its platform ramdisk is empty.
+3. Back up the current partitions and copy `stock/` off the repo (it is gitignored):
+
+   ```bash
+   for p in vendor_boot_a vendor_boot_b boot_a boot_b; do
+     adb shell "su -c 'dd if=/dev/block/by-name/$p of=/sdcard/$p.img bs=1M'"
+     adb pull /sdcard/$p.img stock/
+   done
+   md5sum stock/vendor_boot_a.img   # must be 55daed772d88d3b2c447d7e38957eea7
+   ```
+
+   Also copy `stock/` (about 200 MB) to a USB stick or cloud storage. If
+   `vendor_boot_b.img` matches `vendor_boot_a.img`, slot B is a bit-identical spare.
+4. Make sure fastboot works **before** writing anything:
+
+   ```bash
+   adb reboot bootloader
+   fastboot devices
+   fastboot getvar current-slot
+   fastboot getvar is-userspace    # must print "no" (real bootloader, not fastbootd)
+   ```
+
+### Flash
+
+```bash
+fastboot flash vendor_boot_a out/vendor_boot-ofox.img
+fastboot reboot
+```
+
+Boot Android first: normal boot uses the untouched `boot.img` and the stock platform
+fragment, so the phone should come up normally. Then test recovery (`adb reboot
+recovery`, or power + volume-up from off).
+
+### If something goes wrong
+
+| symptom | escape hatch |
+|---|---|
+| Recovery boots to black screen / bootloop, Android still boots | `adb reboot bootloader` then `fastboot flash vendor_boot_a stock/vendor_boot_a.img && fastboot reboot` |
+| Android does not boot either | power + volume-down into the bootloader, restore `stock/vendor_boot_a.img`; only if needed also restore `boot_a`, `init_boot_a`, `dtbo_a` from `stock/` |
+| Want the untouched slot | `fastboot --set-active=b` (only after verifying slot B is provisioned/identical), then `fastboot --set-active=a` to switch back |
+| fastboot does not enumerate | MTK BROM/Preloader mode + SP Flash Tool with the official X6870 firmware (full firmware is not in this repo; it is a last resort, and preloader/lk are never written by this project) |
+
+No other partition is modified when flashing `vendor_boot_a`: `boot`, `init_boot`,
+`dtbo`, `vbmeta*` and `super` stay stock. Do **not** re-lock the bootloader while a
+non-stock `vendor_boot` is installed.
+
+### On-device checklist in OrangeFox
+
+- `adb devices` lists the recovery; `adb shell` works.
+- Screen, brightness slider and touch work.
+- `cat /sys/class/leds/lcd-backlight/max_brightness` prints `5119`.
+- `cat /proc/modules | wc -l` is non-trivial and `dmesg | grep -i 'version magic'`
+  shows no module load failures (some vermagic mismatch lines are normal on this
+  device; missing modules are not).
+- `/tmp/recovery.log` has no fatal errors.
+- Back up `Boot` and `Vendor Boot` to external storage before changing anything else,
+  then test flashing a zip, `/data` decryption and USB-OTG.
+
 ## Local repack (from a built recovery ramdisk)
 
 ```bash
