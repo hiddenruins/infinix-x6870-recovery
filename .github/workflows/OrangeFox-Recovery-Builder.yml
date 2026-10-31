@@ -198,6 +198,7 @@ jobs:
         FOX_ROOT="${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}"
         export PATH="${FOX_ROOT}/out/host/linux-x86/bin:${PATH}"
         command -v lz4 >/dev/null || { sudo apt-get update && sudo apt-get install -y lz4; }
+        command -v zstd >/dev/null || { sudo apt-get update && sudo apt-get install -y zstd; }
         command -v mkbootimg >/dev/null || { echo "::error::mkbootimg not found under ${FOX_ROOT}/out/host/linux-x86/bin"; exit 1; }
         command -v unpack_bootimg >/dev/null || { echo "::error::unpack_bootimg not found under ${FOX_ROOT}/out/host/linux-x86/bin"; exit 1; }
         cd "$FILE_PATH"

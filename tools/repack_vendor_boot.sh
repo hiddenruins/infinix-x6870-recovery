@@ -13,11 +13,21 @@
 #
 # The input can be:
 #   * a directory                -> packed with mkbootfs/cpio, then compressed
-#   * a raw cpio archive          -> compressed with lz4 legacy (-l -12)
-#   * an lz4-compressed ramdisk   -> used as-is
+#   * a raw cpio archive          -> compressed with zstd -19 -T1
+#   * an lz4/zstd/gzip ramdisk    -> used as-is if it fits in the partition,
+#                                   otherwise decompressed and recompressed with
+#                                   zstd -19 -T1
 #   * a full vendor_boot.img      -> its "recovery" fragment is extracted and used
 #                                   (works for the stock 2-fragment layout and for
 #                                   CI images that carry only the recovery fragment)
+#
+# Why zstd: the stock vendor_boot partition is exactly 64 MiB and the stock
+# platform ramdisk (LZ4, 29.2 MB) plus the DTB leave only ~35.8 MB for the
+# recovery fragment. An OrangeFox 12.1 ramdisk is ~84 MB raw, which is 42.1 MB
+# with LZ4, 37.5 MB with gzip but 29.1 MB with zstd -19. The stock 6.1 kernel is
+# built with CONFIG_RD_ZSTD=y (and CONFIG_ZSTD_DECOMPRESS=y), so zstd is the only
+# high-ratio option that the device can actually unpack. The stock platform
+# ramdisk is never touched or recompressed.
 #
 # Env:
 #   STOCK_DIR    directory with the unpacked stock vendor_boot (default:
@@ -151,14 +161,61 @@ if [ "$(magic "$FRAG" 8)" = "564e4452424f4f54" ]; then
 fi
 
 # --- 2. normalise compression ---------------------------------------------
-if [ "$(magic "$FRAG" 4)" = "02214c18" ] || [ "$(magic "$FRAG" 4)" = "04224d18" ]; then
-    info "ramdisk already lz4-compressed"
+# Figure out what the input actually is, then make sure the fragment fits. The
+# stock platform ramdisk stays byte-identical; only this fragment is compressed.
+detect_format() {
+    case "$(magic "$1" 4)" in
+        02214c18|04224d18) echo lz4 ;;
+        28b52ffd)          echo zstd ;;
+        1f8b*)             echo gzip ;;
+        *)
+            # newc / crc / odc cpio all start with the ASCII string "07070x"
+            case "$(magic "$1" 6)" in
+                303730373031|303730373032|303730373037) echo cpio ;;
+                *) echo unknown ;;
+            esac
+            ;;
+    esac
+}
+
+decompress_to() { # <src> <format> <dst>
+    case "$2" in
+        lz4)  lz4 -d -c "$1" > "$3" ;;
+        zstd) zstd -d -q -c "$1" > "$3" ;;
+        gzip) gzip -d -c "$1" > "$3" ;;
+        *)    return 1 ;;
+    esac
+}
+
+FORMAT="$(detect_format "$FRAG")"
+[ "$FORMAT" != unknown ] || \
+    die "cannot identify $FRAG: expected an lz4/zstd/gzip ramdisk or a raw cpio archive"
+FRAG_SIZE=$(stat -c %s "$FRAG")
+info "recovery fragment format: $FORMAT ($FRAG_SIZE bytes)"
+
+# Keep a decompressed copy so the result can be verified byte for byte.
+if [ "$FORMAT" = cpio ]; then
+    RAW="$FRAG"
+else
+    RAW="$WORK/recovery.cpio"
+    decompress_to "$FRAG" "$FORMAT" "$RAW" || die "failed to decompress $FRAG ($FORMAT)"
+fi
+
+if [ "$FORMAT" != cpio ] && [ "$FRAG_SIZE" -le "$BUDGET" ]; then
+    info "recovery fragment already fits ($FRAG_SIZE <= $BUDGET); keeping it as-is"
     RECOVERY_RD="$FRAG"
 else
-    info "compressing ramdisk with lz4 legacy (-l -12)"
-    RECOVERY_RD="$WORK/recovery.ramdisk.lz4"
-    lz4 -l -12 -f "$FRAG" "$RECOVERY_RD" >/dev/null
+    command -v zstd >/dev/null || \
+        die "the recovery fragment needs recompression but zstd is not installed"
+    RECOVERY_RD="$WORK/recovery.ramdisk.zst"
+    info "compressing ramdisk with zstd -19 -T1 (stock kernel has CONFIG_RD_ZSTD=y)"
+    zstd -19 -T1 -q -c "$RAW" > "$RECOVERY_RD"
 fi
+
+RECOVERY_SIZE=$(stat -c %s "$RECOVERY_RD")
+[ "$RECOVERY_SIZE" -le "$BUDGET" ] || \
+    die "recovery fragment is $RECOVERY_SIZE bytes even with zstd, $(( RECOVERY_SIZE - BUDGET )) over the $BUDGET-byte budget - trim the recovery ramdisk (TW_EXCLUDE_* / OF_* switches)"
+info "recovery fragment compressed: $RECOVERY_SIZE bytes (budget $BUDGET)"
 
 [ -f "$STOCK_DIR/bootconfig" ] || : > "$STOCK_DIR/bootconfig"
 
@@ -185,7 +242,7 @@ mkbootimg \
 # --- 4. sanity checks ------------------------------------------------------
 SIZE=$(stat -c %s "$OUT")
 info "output: $OUT ($SIZE bytes)"
-info "recovery fragment: $(stat -c %s "$RECOVERY_RD") bytes compressed"
+info "recovery fragment: $RECOVERY_SIZE bytes compressed"
 info "budget was $BUDGET bytes for that fragment, $PART_SIZE for the whole image"
 
 if [ "$SIZE" -gt "$PART_SIZE" ]; then
@@ -200,4 +257,18 @@ md5_sum() { md5sum "$1" | cut -d' ' -f1; }
 [ "$(md5_sum "$WORK/check/vendor_ramdisk00")" = "$(md5_sum "$STOCK_DIR/vendor_ramdisk00")" ] \
     || die "platform ramdisk changed during repack"
 
+CHECK_RD="$WORK/check/vendor_ramdisk01"
+[ -f "$CHECK_RD" ] || die "repacked image has no recovery fragment (vendor_ramdisk01)"
+CHECK_FMT="$(detect_format "$CHECK_RD")"
+case "$CHECK_FMT" in
+    zstd) zstd -d -q -c "$CHECK_RD" > "$WORK/check.cpio" ;;
+    lz4)  lz4 -d -c "$CHECK_RD" > "$WORK/check.cpio" ;;
+    gzip) gzip -d -c "$CHECK_RD" > "$WORK/check.cpio" ;;
+    cpio) cp "$CHECK_RD" "$WORK/check.cpio" ;;
+    *)    die "repacked recovery fragment has an unknown format" ;;
+esac
+[ "$(md5_sum "$WORK/check.cpio")" = "$(md5_sum "$RAW")" ] \
+    || die "recovery ramdisk changed during repack"
+
 info "OK - DTB and platform ramdisk are byte-identical to stock"
+info "OK - recovery ramdisk ($CHECK_FMT) unpacks to the same cpio as the input"
