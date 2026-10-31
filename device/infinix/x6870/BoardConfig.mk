@@ -160,7 +160,20 @@ BOARD_USES_METADATA_PARTITION := true
 # ---------------------------------------------------------------- verified boot
 # We flash only vendor_boot (stock boot/init_boot/vbmeta stay untouched).
 # The bootloader must be unlocked before flashing.
-BOARD_AVB_ENABLE := false
+#
+# Do not disable AVB here. OrangeFox 12.1's build/make patch runs its
+# post-build step (FOX_VENDOR_CMD=Fox_After_Recovery_Image: names the output
+# OrangeFox-*.img, writes the .md5, builds the zip installer and applies
+# FOX_REFERENCE_VENDOR_BOOT_IMAGE) *inside the AVB branch* of the vendor_boot
+# rule. With BOARD_AVB_ENABLE := false that branch is not used, the hook never
+# runs and the build produces only out/target/product/x6870/vendor_boot.img -
+# which is what makes "Check if Recovery Exist" fail in CI.
+#
+# No signing key is configured, so avbtool writes an unsigned hash footer
+# (--algorithm NONE) exactly like the stock vendor_boot footer. The device
+# cannot be locked anyway: the image no longer matches the vendor_boot hash
+# descriptor in the stock vbmeta.
+BOARD_AVB_ENABLE := true
 
 # Keep platform happy: never let the build write anti-rollback metadata that
 # would not match this device.

@@ -154,33 +154,42 @@ jobs:
     - name: Check if Recovery Exist
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
-        if [ -f out/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.img ]; then
-            echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
-            echo "FILE_PATH=${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}" >> $GITHUB_ENV
-            echo "MD5_IMG=$(md5sum out/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.img | cut -d ' ' -f 1)" >> $GITHUB_ENV
-        elif [ -f out/target/product/${{ github.event.inputs.DEVICE_NAME }}/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.img ]; then
-            echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
-            echo "FILE_PATH=${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/target/product/${{ github.event.inputs.DEVICE_NAME }}" >> $GITHUB_ENV
-            echo "MD5_IMG=$(md5sum out/target/product/${{ github.event.inputs.DEVICE_NAME }}/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.img | cut -d ' ' -f 1)" >> $GITHUB_ENV
+        OUT_DIR=out/target/product/${{ github.event.inputs.DEVICE_NAME }}
+        NESTED=$OUT_DIR/target/product/${{ github.event.inputs.DEVICE_NAME }}
+
+        if ls $OUT_DIR/OrangeFox*.img >/dev/null 2>&1; then
+            :
+        elif ls $NESTED/OrangeFox*.img >/dev/null 2>&1; then
+            OUT_DIR=$NESTED
+        elif [ -f $OUT_DIR/vendor_boot.img ] && [ "${{ github.event.inputs.BUILD_TARGET }}" = "vendorboot" ]; then
+            echo "::warning title=OrangeFox post-build hook did not run::Falling back to the raw vendor_boot.img (no OrangeFox*.img was produced)."
         else
             echo "Recovery out directory is empty."
             exit 1
         fi
 
+        IMG=$(ls $OUT_DIR/OrangeFox*.img 2>/dev/null | head -n 1 || true)
+        [ -n "$IMG" ] || IMG=$OUT_DIR/vendor_boot.img
+        [ -f "$IMG" ] || { echo "Recovery image not found in $OUT_DIR"; exit 1; }
+
+        echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
+        echo "FILE_PATH=${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/$OUT_DIR" >> $GITHUB_ENV
+        echo "IMG_PATH=${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/$IMG" >> $GITHUB_ENV
+        echo "MD5_IMG=$(md5sum "$IMG" | cut -d ' ' -f 1)" >> $GITHUB_ENV
+
     - name: Rename the Recovery
       run: |
-        cd ${{ env.FILE_PATH }}/
-        if [ "${{ github.event.inputs.BUILD_TARGET }}" = "boot" ]; then
-        mv OrangeFox*.img boot.img
-        echo "RECOVERY_TYPE=boot" >> $GITHUB_ENV
-        elif [ "${{ github.event.inputs.BUILD_TARGET }}" = "recovery" ]; then
-        mv OrangeFox*.img recovery.img
-        echo "RECOVERY_TYPE=recovery" >> $GITHUB_ENV
-        elif [ "${{ github.event.inputs.BUILD_TARGET }}" = "vendorboot" ]; then
-        mv OrangeFox*.img vendor_boot.img
-        echo "RECOVERY_TYPE=vendor_boot" >> $GITHUB_ENV
+        cd "$FILE_PATH"
+        case "${{ github.event.inputs.BUILD_TARGET }}" in
+          boot)      RECOVERY_TYPE=boot ;;
+          recovery)  RECOVERY_TYPE=recovery ;;
+          vendorboot) RECOVERY_TYPE=vendor_boot ;;
+          *)         RECOVERY_TYPE=${{ github.event.inputs.BUILD_TARGET }} ;;
+        esac
+        if [ "$(basename "$IMG_PATH")" != "$RECOVERY_TYPE.img" ]; then
+          mv -f "$IMG_PATH" "$RECOVERY_TYPE.img"
         fi
-      continue-on-error: true
+        echo "RECOVERY_TYPE=$RECOVERY_TYPE" >> $GITHUB_ENV
       
     - name: Repack vendor_boot with the stock platform ramdisk
       if: github.event.inputs.BUILD_TARGET == 'vendorboot' && github.event.inputs.STOCK_VENDOR_BOOT_URL != ''
