@@ -63,7 +63,6 @@ case "$OUT"   in /*) ;; *) OUT="$PWD/$OUT" ;; esac
 if [ -n "$FOX_ROOT" ]; then
     export PATH="$FOX_ROOT/out/host/linux-x86/bin:$PATH"
 fi
-command -v unpack_bootimg >/dev/null || die "unpack_bootimg not found (add the build tree via --fox-root)"
 command -v zstd >/dev/null || die "zstd not found"
 command -v unzip >/dev/null || die "unzip not found"
 command -v zip >/dev/null || die "zip not found"
@@ -77,23 +76,77 @@ trap 'rm -rf "$WORK"; rmdir "$SCRATCH" 2>/dev/null || true' EXIT
 magic() { od -An -tx1 -N"$2" "$1" | tr -d ' \n'; }
 
 # --- 1. recovery fragment out of the built image ---------------------------
-info "unpacking $IMAGE"
-unpack_bootimg --boot_img "$IMAGE" --out "$WORK/img" >/dev/null
-unpack_bootimg --boot_img "$IMAGE" --format info > "$WORK/img.info"
+# The vendor_boot header is parsed here directly instead of with unpack_bootimg:
+# CI builds mkbootimg but not its unpack counterpart, and the layout is simple.
+info "parsing $IMAGE"
+mkdir -p "$WORK/img"
+FRAG="$WORK/img/vendor_ramdisk_recovery"
+python3 - "$IMAGE" "$FRAG" <<'PY'
+import struct
+import sys
 
-SEL="$(awk '
-    /^[[:space:]]*vendor_ramdisk[0-9]+:[[:space:]]*\{/ { n = $1; sub(":", "", n) }
-    n != "" && $0 ~ /type: 0x2/ { print n; exit }' "$WORK/img.info")"
-if [ -z "$SEL" ]; then
-    # A CI image built with BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT has a
-    # single fragment; accept it if it is the only one.
-    set -- "$WORK"/img/vendor_ramdisk*
-    [ $# -eq 1 ] || die "cannot identify the recovery fragment in $IMAGE"
-    SEL="$(basename "$1")"
-fi
-FRAG="$WORK/img/$SEL"
-[ -f "$FRAG" ] || die "declared recovery fragment $SEL is missing"
-info "recovery fragment: $SEL ($(stat -c %s "$FRAG") bytes)"
+src, out = sys.argv[1], sys.argv[2]
+with open(src, "rb") as fh:
+    data = fh.read()
+
+if len(data) < 2128 or data[:8] != b"VNDRBOOT":
+    sys.exit(f"{src}: not a vendor_boot image")
+
+header_version, page_size = struct.unpack_from("<II", data, 8)
+if page_size == 0 or page_size & (page_size - 1):
+    sys.exit(f"{src}: bad page size {page_size}")
+
+# header_size is at 2096, vendor_ramdisk_size at 24 (vendor_boot_img_hdr_v3/v4)
+header_size = struct.unpack_from("<I", data, 2096)[0]
+vendor_ramdisk_size = struct.unpack_from("<I", data, 24)[0]
+base = (header_size + page_size - 1) // page_size * page_size
+
+if header_version == 3:
+    if base + vendor_ramdisk_size > len(data):
+        sys.exit(f"{src}: truncated vendor ramdisk")
+    frag = data[base:base + vendor_ramdisk_size]
+    print("fragment: header v3, single vendor ramdisk")
+elif header_version == 4:
+    table_size, entry_num, entry_size = struct.unpack_from("<III", data, 2112)
+    dtb_size = struct.unpack_from("<I", data, 2100)[0]
+    # Layout: header, vendor ramdisk, dtb, vendor ramdisk table, bootconfig.
+    dtb_off = (base + vendor_ramdisk_size + page_size - 1) // page_size * page_size
+    table_off = (dtb_off + dtb_size + page_size - 1) // page_size * page_size
+    if entry_size < 108:
+        sys.exit(f"{src}: bad vendor_ramdisk_table_entry_size {entry_size}")
+    if table_off + table_size > len(data):
+        sys.exit(f"{src}: truncated vendor ramdisk table")
+
+    entries = []
+    for i in range(entry_num):
+        off = table_off + i * entry_size
+        r_size, r_off, r_type = struct.unpack_from("<III", data, off)
+        name = data[off + 12:off + 44].split(b"\0", 1)[0].decode("ascii", "replace")
+        entries.append((r_type, name, r_off, r_size))
+        print(f"fragment: type=0x{r_type:x} name={name!r} size={r_size}")
+
+    # type 0x2 is VENDOR_RAMDISK_TYPE_RECOVERY
+    chosen = next((e for e in entries if e[0] == 2), None)
+    if chosen is None:
+        if len(entries) == 1:
+            chosen = entries[0]
+            print("fragment: no type-0x2 entry, using the only fragment")
+        else:
+            sys.exit(f"{src}: no recovery (type 0x2) fragment")
+
+    start = base + chosen[2]
+    if start + chosen[3] > len(data):
+        sys.exit(f"{src}: recovery fragment is out of bounds")
+    frag = data[start:start + chosen[3]]
+else:
+    sys.exit(f"{src}: unsupported vendor_boot header version {header_version}")
+
+with open(out, "wb") as fh:
+    fh.write(frag)
+print(f"fragment: extracted {len(frag)} bytes")
+PY
+[ -s "$FRAG" ] || die "could not extract the recovery fragment from $IMAGE"
+info "recovery fragment: $(stat -c %s "$FRAG") bytes"
 
 case "$(magic "$FRAG" 4)" in
     02214c18|04224d18) FRAG_FMT=lz4 ;;

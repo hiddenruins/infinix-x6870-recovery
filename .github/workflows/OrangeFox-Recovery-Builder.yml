@@ -220,7 +220,13 @@ jobs:
       run: |
         set -euo pipefail
         FOX_ROOT="${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}"
-        command -v zstd >/dev/null || { sudo apt-get update && sudo apt-get install -y zstd; }
+        MISSING=""
+        for t in zstd lz4 cpio zip unzip python3; do
+          command -v "$t" >/dev/null || MISSING="$MISSING $t"
+        done
+        if [ -n "$MISSING" ]; then
+          sudo apt-get update && sudo apt-get install -y $MISSING
+        fi
         ZIP=$(ls "$FILE_PATH"/OrangeFox*.zip 2>/dev/null | grep -v 'vendor_boot-update' | head -n 1 || true)
         if [ -z "$ZIP" ]; then
           echo "::warning title=No OrangeFox zip::The build did not produce an installer zip; skipping the update zip."
