@@ -35,6 +35,10 @@
 #   STOCK_IMG    stock vendor_boot image to unpack instead of using STOCK_DIR
 #                (handy in CI, where the gitignored stock/ tree is absent)
 #   SCRATCH_ROOT  where temporary work dirs are created (default: <project>/.scratch)
+#   AVB_FOOTER   auto (default), 1 or 0. With auto/1 and avbtool installed, append
+#                the same unsigned AVB hash footer the stock image and the CI
+#                artifact carry (--algorithm NONE), padding the image to the
+#                partition size. Set to 0 for a footerless image.
 #
 # Nothing outside this project directory is written to or deleted: the scratch
 # directory defaults to <project>/.scratch and is removed on exit.
@@ -239,6 +243,41 @@ mkbootimg \
     --vendor_ramdisk_fragment "$RECOVERY_RD" \
     --vendor_boot "$OUT"
 
+# --- 3b. AVB hash footer ---------------------------------------------------
+# The stock image and the CI artifact both end with an unsigned AVB hash footer
+# ("Algorithm: NONE"), and the partition is padded to its full 64 MiB. Some
+# bootloaders look for the footer even when the device is unlocked, so keep the
+# stock layout instead of shipping a footerless image. The footer has no key,
+# exactly like stock; it is a hash descriptor, not a signature.
+AVB_FOOTER="${AVB_FOOTER:-auto}"
+ADDED_FOOTER=0
+case "$AVB_FOOTER" in
+    auto)
+        if command -v avbtool >/dev/null; then
+            ADDED_FOOTER=1
+        fi
+        ;;
+    1)
+        command -v avbtool >/dev/null || die "AVB_FOOTER=1 but avbtool is not installed"
+        ADDED_FOOTER=1
+        ;;
+    0) ;;
+    *) die "AVB_FOOTER must be auto, 1 or 0" ;;
+esac
+if [ "$ADDED_FOOTER" = 1 ]; then
+    info "adding unsigned AVB hash footer (algorithm NONE), padding to $PART_SIZE bytes"
+    CONTENT_SIZE=$(stat -c %s "$OUT")
+    avbtool add_hash_footer \
+        --image "$OUT" \
+        --partition_size "$PART_SIZE" \
+        --partition_name vendor_boot \
+        --algorithm NONE \
+        --hash_algorithm sha256 \
+        --rollback_index 0 \
+        --salt '' >/dev/null \
+        || die "avbtool add_hash_footer failed"
+fi
+
 # --- 4. sanity checks ------------------------------------------------------
 SIZE=$(stat -c %s "$OUT")
 info "output: $OUT ($SIZE bytes)"
@@ -269,6 +308,17 @@ case "$CHECK_FMT" in
 esac
 [ "$(md5_sum "$WORK/check.cpio")" = "$(md5_sum "$RAW")" ] \
     || die "recovery ramdisk changed during repack"
+
+if [ "$ADDED_FOOTER" = 1 ]; then
+    [ "$SIZE" = "$PART_SIZE" ] \
+        || die "AVB footer was requested but the image is $SIZE bytes, not $PART_SIZE"
+    avbtool info_image --image "$OUT" > "$WORK/avb.info" 2>/dev/null \
+        || die "avbtool cannot read the footer it just wrote"
+    grep -q 'Algorithm: *NONE' "$WORK/avb.info" \
+        || die "AVB footer is not the expected unsigned NONE algorithm"
+    grep -q "Original image size: *$CONTENT_SIZE" "$WORK/avb.info" \
+        || die "AVB footer describes the wrong original image size"
+fi
 
 info "OK - DTB and platform ramdisk are byte-identical to stock"
 info "OK - recovery ramdisk ($CHECK_FMT) unpacks to the same cpio as the input"

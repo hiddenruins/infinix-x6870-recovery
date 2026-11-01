@@ -101,10 +101,11 @@ with zstd whenever the input fragment does not already fit.
 | asset | what it actually is | what to do with it |
 |---|---|---|
 | `vendor_boot.img` | raw build: AOSP **empty** platform ramdisk (2.2 MB) + OrangeFox recovery fragment (LZ4, 42.1 MB), padded to 64 MiB with an unsigned AVB footer | **never flash it**; it is the input for `tools/repack_vendor_boot.sh` |
-| `OrangeFox-R12.0_1-Unofficial-x6870.zip` | OrangeFox installer zip; contains `recovery.img` (md5-identical to the release `vendor_boot.img`), `vendor_ramdisk_recovery.cpio` (LZ4, 42.1 MB), `magiskboot` and helper scripts | **do not flash yet** on this device (see below) |
+| `OrangeFox-R12.0_1-Unofficial-x6870.zip` | unmodified OrangeFox installer zip; contains `recovery.img` (md5-identical to the release `vendor_boot.img`), `vendor_ramdisk_recovery.cpio` (LZ4, 42.1 MB), `magiskboot` and helper scripts | **do not flash on a fresh device**: its install branch repacks ~71.6 MB without a size check and writes both slots (see below). Use the update zip instead once OrangeFox is installed |
+| `OrangeFox-x6870-vendor_boot-update.zip` | the same zip with a **zstd** `vendor_ramdisk_recovery.cpio` (29.1 MB) and a patched installer | **the zip update path**, flashed *from a working OrangeFox* (see below) |
 | `recovery-installer.zip` | third-party generic installer with the raw `vendor_boot.img` added | **do not use**; the workflow now defaults to not producing it |
 
-Why the zip is not the initial install path here:
+Why the plain OrangeFox zip is not the initial install path here:
 
 - Its `recovery.img` is the same un-repacked image as the release `vendor_boot.img`, so
   flashing it gives a recovery without the stock platform ramdisk (black screen).
@@ -121,9 +122,33 @@ Why the zip is not the initial install path here:
 On this device it finds no usable image and aborts; if it did find one, it would
 overwrite `boot_a`/`boot_b` with a vendor_boot image. Leave it alone.
 
-Once OrangeFox is already running you can rebuild the zip with a zstd
-`vendor_ramdisk_recovery.cpio` (and a zstd-aware, size-checked installer) if you want
-zip-based updates; the first installation must go through the repacked full image below.
+`OrangeFox-x6870-vendor_boot-update.zip` is produced by
+`tools/prepare_update_zip.sh` (run by CI after every vendor_boot build). It keeps the
+stock blobs on the device: the installer dumps the installed vendor_boot and only
+replaces the recovery fragment. It also refuses to write an image that does not fit and
+writes only the slot recovery is running from, so the other slot keeps its copy as a
+fallback. The **first** installation must still go through the repacked full image.
+
+## Updating from an already-working OrangeFox (zip)
+
+Once OrangeFox boots on the device, future builds can be installed without fastboot:
+
+1. Copy `OrangeFox-x6870-vendor_boot-update.zip` to internal storage / USB-OTG.
+2. In OrangeFox: **Install**, select the zip, swipe to confirm.
+3. Read the log. It must print `Vendor_boot device ...`, `Installing only the ramdisk`,
+   the `Repacked image: ... bytes; /dev/block/by-name/vendor_boot_a: 67108864 bytes`
+   line, and then write only the current slot.
+4. Reboot. The other slot is untouched; use `fastboot --set-active=<other>` to fall back.
+
+The patched installer aborts without writing anything if the repacked image is larger
+than the partition, if `ro.boot.slot_suffix` is empty, or if it cannot unpack the dumped
+image. It also refuses to run on a build where `orangefox.vendor_boot.recovery` is not
+true (i.e. when OrangeFox is not running from vendor_boot).
+
+Do not flash the update zip from Android/Magisk, and do not use it as the first install:
+on a stock device the installer would dump the stock vendor_boot and still need the
+stock platform ramdisk, which is present, but the device must already be running
+OrangeFox for the ramdisk-only branch to be selected safely.
 
 ## Repack a CI build (required for `vendorboot`)
 
@@ -138,14 +163,16 @@ STOCK_IMG=stock/vendor_boot_a.img \
 # 3. flash the result (slot _a shown; use vendor_boot_b if you boot from slot b)
 adb reboot bootloader
 fastboot flash vendor_boot_a out/vendor_boot-ofox.img
-fastboot reboot recovery
+fastboot reboot            # boot Android first; then use Power+VolUp or adb reboot recovery
 ```
 
 The script detects the input format (lz4/zstd/gzip/cpio), keeps it if it fits, otherwise
 decompresses it and recompresses with `zstd -19 -T1`. It asserts that the DTB and the
 stock platform ramdisk are byte-identical to the stock image, that the recovery fragment
 decompresses back to the same cpio, and refuses if the result exceeds the 64 MiB
-partition.
+partition. When `avbtool` is installed it also appends the same unsigned
+(`Algorithm: NONE`) AVB hash footer the stock image and CI artifact carry, padding the
+image to exactly 64 MiB (`AVB_FOOTER=0` opts out).
 
 ## Safe flashing and rollback
 
@@ -165,13 +192,15 @@ partition.
 
    ```bash
    IMAGE=out/vendor_boot-ofox.img
-   stat -c '%s %n' "$IMAGE"                                  # must be <= 67108864
+   stat -c '%s %n' "$IMAGE"                                  # exactly 67108864
    unpack_bootimg --boot_img "$IMAGE" --format info           # header v4, 2 fragments
+   avbtool info_image --image "$IMAGE" | head -8              # Algorithm: NONE
    ```
 
    It must report `header version: 4`, `vendor_ramdisk00` type `0x1`, and
-   `vendor_ramdisk01` type `0x2`, name `recovery`. Never flash the CI artifact
-   directly: its platform ramdisk is empty.
+   `vendor_ramdisk01` type `0x2`, name `recovery`. The AVB footer must be
+   `Algorithm: NONE` (there is no signing key, exactly like stock). Never flash the CI
+   artifact directly: its platform ramdisk is empty.
 3. Back up every boot-critical partition from both slots while Android still works,
    and copy `stock/` off the repo (it is gitignored):
 
@@ -311,6 +340,7 @@ STOCK_IMG=stock/vendor_boot_a.img ./tools/repack_vendor_boot.sh <input> <out>
 - `device/infinix/x6870/vendorsetup.sh` - OrangeFox build flags (exported env vars)
 - `device/infinix/x6870/BoardConfig.mk` - Platform/boot/recovery/VB config
 - `tools/repack_vendor_boot.sh` - Vendor_boot repacker (preserves DTB + platform ramdisk)
+- `tools/prepare_update_zip.sh` - Builds the flashable-from-recovery vendor_boot update zip
 - `tools/verify_device.sh` - Read-only on-device checks for the values that need the phone
 - `stock/` - Stock images and extracted components for reference/repacking
 
