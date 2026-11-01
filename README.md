@@ -112,7 +112,8 @@ Why the plain OrangeFox zip is not the initial install path here:
 - Its `vendor_boot` installer branch (`FOX_INSTALLER_VENDOR_BOOT_RAMDISK_INSTALL`) dumps
   the current vendor_boot, replaces the recovery fragment with the 42.1 MB LZ4 cpio and
   repacks: ~71.6 MB, which does not fit, and that branch has no partition-size check. It
-  then writes the result to **both** slots, so you lose the stock spare.
+  then writes the result to **both** slots, so it would overwrite your only stock copy
+  (slot B is unprovisioned on this device).
 - `flash-whole-image.sh` flashes that same un-repacked `recovery.img`;
   `flash-ramdisk.sh` uses `fastboot flash vendor_boot:recovery` with the 42.1 MB LZ4
   ramdisk, which also cannot fit.
@@ -126,8 +127,9 @@ overwrite `boot_a`/`boot_b` with a vendor_boot image. Leave it alone.
 `tools/prepare_update_zip.sh` (run by CI after every vendor_boot build). It keeps the
 stock blobs on the device: the installer dumps the installed vendor_boot and only
 replaces the recovery fragment. It also refuses to write an image that does not fit and
-writes only the slot recovery is running from, so the other slot keeps its copy as a
-fallback. The **first** installation must still go through the repacked full image.
+writes only the slot recovery is running from. On this device slot B is unprovisioned,
+so the fallback for a bad update is `stock/vendor_boot_a.img`, not the other slot. The
+**first** installation must still go through the repacked full image.
 
 ## Updating from an already-working OrangeFox (zip)
 
@@ -138,7 +140,8 @@ Once OrangeFox boots on the device, future builds can be installed without fastb
 3. Read the log. It must print `Vendor_boot device ...`, `Installing only the ramdisk`,
    the `Repacked image: ... bytes; /dev/block/by-name/vendor_boot_a: 67108864 bytes`
    line, and then write only the current slot.
-4. Reboot. The other slot is untouched; use `fastboot --set-active=<other>` to fall back.
+4. Reboot. The other slot is untouched; on this device fall back with
+   `fastboot flash vendor_boot_a stock/vendor_boot_a.img` (slot B is zero-filled).
 
 The patched installer aborts without writing anything if the repacked image is larger
 than the partition, if `ro.boot.slot_suffix` is empty, or if it cannot unpack the dumped
@@ -160,7 +163,7 @@ CI uploads `vendor_boot.img` **without** the stock platform ramdisk. After every
 STOCK_IMG=stock/vendor_boot_a.img \
   ./tools/repack_vendor_boot.sh ~/Downloads/vendor_boot.img out/vendor_boot-ofox.img
 
-# 3. flash the result (slot _a shown; use vendor_boot_b if you boot from slot b)
+# 3. flash the result to the active slot (this device: slot _a)
 adb reboot bootloader
 fastboot flash vendor_boot_a out/vendor_boot-ofox.img
 fastboot reboot            # boot Android first; then use Power+VolUp or adb reboot recovery
@@ -178,16 +181,21 @@ image to exactly 64 MiB (`AVB_FOOTER=0` opts out).
 
 ### Before you flash
 
-1. Confirm the phone is still on the build the stock dump came from:
+1. Confirm the live `vendor_boot_a` is still byte-identical to the dump the repack used.
+   On a GSI, `ro.build.*` describe the GSI and the vendor/super partitions, not the
+   stock system the dump came from, so compare the partition itself:
 
    ```bash
-   adb shell getprop ro.build.id ro.build.version.incremental ro.boot.slot_suffix ro.boot.verifiedbootstate
+   adb shell 'md5sum /dev/block/by-name/vendor_boot_a'   # 55daed772d88d3b2c447d7e38957eea7
+   md5sum stock/vendor_boot_a.img
    ```
 
-   Expected at capture time: `BP2A.250605.031.A3`, `301500017`, `_a`, `orange`.
-   If an OTA changed the build, **re-dump the active slot's `vendor_boot` and `boot`**
-   and repack from the new dump: the platform-ramdisk kernel modules must match the
-   running kernel, or display/touch/storage will not come up.
+   If they differ, **re-dump the active slot's `vendor_boot` and `boot`** and repack from
+   the new dump: the platform-ramdisk kernel modules must match the running kernel, or
+   display/touch/storage will not come up. Also read the real bootloader state from
+   `/proc/bootconfig` (`androidboot.verifiedbootstate`); a GSI or root solution may spoof
+   the `ro.boot.*` properties - this device reports `green` there while the bootloader is
+   actually `orange`/unlocked.
 2. Verify the repacked image (the repack script already does the hard checks):
 
    ```bash
@@ -200,21 +208,24 @@ image to exactly 64 MiB (`AVB_FOOTER=0` opts out).
    It must report `header version: 4`, `vendor_ramdisk00` type `0x1`, and
    `vendor_ramdisk01` type `0x2`, name `recovery`. The AVB footer must be
    `Algorithm: NONE` (there is no signing key, exactly like stock). Never flash the CI
-   artifact directly: its platform ramdisk is empty.
-3. Back up every boot-critical partition from both slots while Android still works,
+   artifact directly: its platform ramdisk is empty. To check the hash descriptor as
+   well, `avbtool verify_image --image ...` reconstructs the file name from the
+   partition name, so copy the image to `.../vendor_boot.img` first.
+3. Back up every boot-critical partition from the active slot while Android still works,
    and copy `stock/` off the repo (it is gitignored):
 
    ```bash
-   for p in vendor_boot_a vendor_boot_b boot_a boot_b init_boot_a init_boot_b dtbo_a dtbo_b; do
+   for p in vendor_boot_a boot_a init_boot_a dtbo_a vbmeta_a; do
      adb shell "su -c 'dd if=/dev/block/by-name/$p of=/sdcard/$p.img bs=1M'"
      adb pull /sdcard/$p.img stock/
    done
    md5sum stock/vendor_boot_a.img   # must be 55daed772d88d3b2c447d7e38957eea7
    ```
 
-   Also copy `stock/` (about 350 MB now) to a USB stick or cloud storage.
-   If `vendor_boot_b.img` and `boot_b.img` match their `_a` counterparts, slot B
-   is a bit-identical spare and can be used for a bootloop-safe test.
+   Also copy `stock/` (about 150 MB now) to a USB stick or cloud storage.
+   Dumping slot B is pointless on this device: every `*_b` partition is zero-filled
+   (unprovisioned), so it is not a usable spare. `init_boot_a` may be patched by
+   KernelSU/Magisk - keep that copy for reference, but it is not a stock fallback.
 
 4. Make sure fastboot works **before** writing anything:
 
@@ -228,7 +239,8 @@ image to exactly 64 MiB (`AVB_FOOTER=0` opts out).
 
    If `fastboot devices` lists nothing here, **stop** and fix USB/udev first. The
    rollback plan depends on reaching this mode from a phone that does not boot.
-   Verify the rollback command itself works (no-op, writes the current slot again):
+   Verify the rollback command itself is accepted (a no-op that re-selects the current
+   slot):
 
    ```bash
    fastboot --set-active=a      # use the slot printed by getvar current-slot
@@ -241,65 +253,85 @@ image to exactly 64 MiB (`AVB_FOOTER=0` opts out).
 ### Why a vendor_boot mistake cannot require an auth flash
 
 Fastboot/preloader/lk live in partitions this project never writes
-(`preloader`, `lk`, `vbmeta`, GPT). A bad `vendor_boot` is consumed *after* lk has
-already run, so it cannot stop the bootloader from starting: power + volume-down at
-power-on still lands in fastboot, where you can restore the stock image. The
-auth-flash / service-centre path is only needed when `preloader`/`lk`/GPT are
+(`preloader`, `lk`, GPT; this procedure also leaves `vbmeta` alone). A bad `vendor_boot`
+is consumed *after* lk has already run, so it cannot stop the bootloader from starting:
+power + volume-down at power-on still lands in fastboot, where you can restore the stock
+image. The auth-flash / service-centre path is only needed when `preloader`/`lk`/GPT are
 corrupted, which this procedure does not touch.
 
 Still, do the write test below until you have seen `OKAY` from fastboot at least once,
-and never flash the only working slot first.
+and keep `stock/vendor_boot_a.img` where fastboot and a rooted Android can reach it.
 
-### Flash bootloop-safely (recommended: inactive slot)
+On this device `vbmeta_a` carries `Flags: 3` (disable-verity + disable-verification), so
+the bootloader does not check the `vendor_boot` hash at all and the unsigned
+`Algorithm: NONE` footer cannot fail verification. That only removes the *rejection* of a
+bad image: a wrong platform ramdisk still boots to a black screen, so the rollback is
+still the real safety net.
 
-Only do this if step 3 showed slot B is provisioned and identical to A. The idea is to
-leave slot A 100% stock and test OrangeFox on B, so the only recovery action needed is
-`fastboot --set-active=a`.
+### Flash procedure (direct, active slot)
+
+This device ships with only slot A provisioned. Every `*_b` partition (`boot`,
+`vendor_boot`, `init_boot`, `dtbo`, `vbmeta`) is zero-filled, so slot B cannot boot and
+`fastboot --set-active=b` would leave you with no bootable slot. Flash the active slot
+directly.
+
+The rollback source is `stock/vendor_boot_a.img`, proved byte-identical to the live
+partition above. lk/preloader/fastboot are never touched, so a bad image is always
+recoverable through fastboot.
 
 ```bash
-# 1. prove fastboot can authenticate a write, using the stock image you just dumped
-fastboot flash vendor_boot_b stock/vendor_boot_b.img     # must print OKAY
+# 1. write test: the same bytes already in the partition
+fastboot flash vendor_boot_a stock/vendor_boot_a.img      # must print OKAY
 
-# 2. put OrangeFox on the inactive slot
-fastboot flash vendor_boot_b out/vendor_boot-ofox.img
-
-# 3. boot the other slot and check Android first
-fastboot --set-active=b
+# 2. the real image
+fastboot flash vendor_boot_a out/vendor_boot-ofox.img     # must print OKAY
 fastboot reboot
-adb shell getprop ro.boot.slot_suffix                  # _b
 
-# 4. then test recovery
+# 3. Android must still boot normally (the platform fragment is stock-identical);
+#    then enter recovery
+adb shell getprop ro.boot.slot_suffix                    # _a
 adb reboot recovery
 ```
 
-If OrangeFox boots, you are done: slot A still has the untouched stock vendor_boot.
-If you want OrangeFox on A too, repeat the same steps for `vendor_boot_a` as a second
-phase, while B (now known-good) stays as the spare.
+Normal Android boot keeps working after this flash: only the type-`0x2` recovery
+fragment changes, and the bootloader uses it only when booting recovery.
 
-### If slot B is empty or differs from A
+Do not run `fastboot --set-active=b` on this device. If the bootloader ever falls back to
+the empty slot B by itself, `fastboot --set-active=a` restores slot A.
 
-Do not switch to it. Fall back to flashing the active slot `vendor_boot_a` directly,
-but only after step 4 succeeded and after the write test:
+### If slot B is provisioned (other units)
+
+Some units may ship with both slots populated. Check before using the inactive-slot
+route:
 
 ```bash
-fastboot flash vendor_boot_a stock/vendor_boot_a.img     # write test, same bytes
-fastboot flash vendor_boot_a out/vendor_boot-ofox.img
+adb shell 'md5sum /dev/block/by-name/vendor_boot_a /dev/block/by-name/vendor_boot_b'
+```
+
+Only if `vendor_boot_b` is non-zero **and** `boot_b`/`init_boot_b`/`dtbo_b`/`vbmeta_b`
+match their `_a` counterparts can you leave A stock and test on B:
+
+```bash
+fastboot flash vendor_boot_b out/vendor_boot-ofox.img
+fastboot --set-active=b
 fastboot reboot
+# fallback: fastboot --set-active=a
 ```
 
 ### If something goes wrong
 
 | symptom | escape hatch |
 |---|---|
-| OrangeFox/Android on B bootloops | hold power ~15 s, then power + volume-down into fastboot: `fastboot --set-active=a && fastboot reboot` |
-| Android on B does not boot but fastboot works | same: `fastboot --set-active=a`; slot A was never modified |
-| Recovery black-screens but Android boots | `adb reboot bootloader` then `fastboot flash vendor_boot_a stock/vendor_boot_a.img && fastboot reboot` (or restore B) |
+| Recovery black-screens but Android still boots | `adb reboot bootloader` then `fastboot flash vendor_boot_a stock/vendor_boot_a.img && fastboot reboot` |
+| Recovery and Android both fail, fastboot works | hold power ~15 s, then power + volume-down: `fastboot flash vendor_boot_a stock/vendor_boot_a.img && fastboot reboot` |
+| The slot shows `_b` (bootloader switched to the empty slot) | `fastboot --set-active=a && fastboot reboot` |
 | Fastboot works but you prefer not to use it | from rooted Android: `adb push stock/vendor_boot_a.img /sdcard/ && adb shell "su -c 'dd if=/sdcard/vendor_boot_a.img of=/dev/block/by-name/vendor_boot_a bs=1M'"` |
 | Fastboot does not enumerate | MTK BROM/Preloader + SP Flash Tool with the official X6870 firmware (auth flash, service centre territory). Only reachable if preloader/lk/GPT is damaged - never done by this project |
 
-No other partition is modified when flashing `vendor_boot_*`: `boot`, `init_boot`,
-`dtbo`, `vbmeta*` and `super` stay stock. Do **not** re-lock the bootloader while a
-non-stock `vendor_boot` is installed.
+No other partition is modified when flashing `vendor_boot_a`: `boot`, `init_boot`,
+`dtbo`, `vbmeta*` and `super` are left alone. (`init_boot_a` on this unit already carries
+the KernelSU patch; leave it as-is.) Do **not** re-lock the bootloader while a non-stock
+`vendor_boot` is installed.
 
 ### On-device checklist in OrangeFox
 
